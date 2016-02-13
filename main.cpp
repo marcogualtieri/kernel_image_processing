@@ -28,6 +28,27 @@ bool AreMatsEqual(Mat a, Mat b)
     return equal(a.begin<Vec3b>(), a.end<Vec3b>(), b.begin<Vec3b>());
 }
 
+uchar* ConvertMatToArray(Mat a) 
+{
+    vector<uchar> tmp;
+    tmp.assign((uchar*)a.datastart, (uchar*)a.dataend);
+    return &tmp[0];
+}
+
+float* Convert2DVectorToArray(vector<vector<float> >* kernel)
+{
+    int k = (*kernel).size();
+    float* tmp = new float[k*k];
+    for(int i = 0; i < k; i++)
+    {
+        for(int j = 0; j < k; j++)
+        {
+            tmp[j + i*k] = (*kernel)[i][j];
+        }
+    }
+    return tmp;
+}
+
 Vec3b Convolution(Mat src, vector<vector<float> >* kernel, int x, int y) 
 {
     int k = (*kernel).size() / 2;
@@ -58,14 +79,37 @@ Mat ApplyKernelSequential(Mat src, vector<vector<float> >* kernel)
     return dst;
 }
 
-Mat ApplyKernelParallel(Mat src, vector<vector<float> >* kernel)
+Mat ApplyKernelSequentialFlat(Mat src, vector<vector<float> >* kernel) 
+{
+    int kernel_flat_size = (*kernel).size() * (*kernel).size();
+    int src_flat_size = src.rows * src.cols;
+
+    uchar* src_flat = ConvertMatToArray(src);
+    float* kernel_flat = Convert2DVectorToArray(kernel);
+    uchar dst_flat[src_flat_size];
+
+    for(int i = 0; i < src.rows*src.cols; i++)
+    {
+        for(int j = 0; j < kernel_flat_size; j++)
+        {
+            // TODO convolve with kernel - flat mode
+            // dst_flat[xx] = src_flat[yy] + kernel_flat[zz]
+        }
+    }
+    
+    Mat dst = Mat(src.rows, src.cols, src.type(), dst_flat);
+    return dst;
+}
+
+Mat ApplyKernelParallel(Mat src, vector<vector<float> >* kernel, int num_threads)
 {
     Mat dst = Mat(src.rows, src.cols, src.type());
     omp_set_nested(1);
-    #pragma omp parallel for collapse(2)
-    for (int y = 0; y < src.rows; y++) 
+    int x,y;
+    #pragma omp parallel for num_threads(num_threads) collapse(2)
+    for (y = 0; y < src.rows; y++) 
     {
-        for (int x = 0; x < src.cols; x++) 
+        for (x = 0; x < src.cols; x++) 
         {
             dst.at<Vec3b>(y,x) = Convolution(src, kernel, x, y);
         }
@@ -76,28 +120,40 @@ Mat ApplyKernelParallel(Mat src, vector<vector<float> >* kernel)
 int main(int argc, char *argv[])
 { 
     char* filename = argv[1];
- 
+
     Mat src = imread(filename, CV_LOAD_IMAGE_COLOR);
- 
+
     if (!src.data) 
     {
         cout << "Image file " << filename << "not found!" << endl;
         return -1;        
     }     
+
     cout << "Processing image file " << filename << endl;
 
     GaussianKernel kernel(5);
 
-    Mat dst_sequential, dst_parallel;
+    Mat dst_sequential, dst_sequential_flat,
+        dst_parallel, dst_parallel_flat;
 
-    profile_omp_time__("** Sequential version")
+    profile_omp_time__("*** Sequential version")
     {
         dst_sequential = ApplyKernelSequential(src, &(kernel.values));
     }
 
-    profile_omp_time__("** Parallel version")
+    profile_omp_time__("*** Sequential version - Flat")
     {
-        dst_parallel = ApplyKernelParallel(src, &(kernel.values));
+        dst_sequential_flat = ApplyKernelSequentialFlat(src, &(kernel.values));
+    }
+
+    for(int t = 0; t < 4; t++) {
+        int num_threads = pow(2, t);
+        ostringstream label;
+        label << "*** OpenMP version - " << num_threads << " thread(s)";
+        profile_omp_time__(label.str())
+        {
+            dst_parallel = ApplyKernelParallel(src, &(kernel.values), num_threads);
+        }
     }
 
     cout << "** Results are equal: " << AreMatsEqual(dst_sequential, dst_parallel) << endl;
