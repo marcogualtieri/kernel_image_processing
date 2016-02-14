@@ -49,7 +49,7 @@ float* Convert2DVectorToArray(vector<vector<float> >* kernel)
     return tmp;
 }
 
-Vec3b Convolution(Mat src, vector<vector<float> >* kernel, int x, int y) 
+Vec3b Convolution(const Mat src, vector<vector<float> >* kernel, int x, int y) 
 {
     int k = (*kernel).size() / 2;
     int x_tmp, y_tmp;
@@ -66,7 +66,7 @@ Vec3b Convolution(Mat src, vector<vector<float> >* kernel, int x, int y)
     return sum;
 }
 
-Mat ApplyKernelSequential(Mat src, vector<vector<float> >* kernel) 
+Mat ApplyKernelSequential(const Mat src, vector<vector<float> >* kernel) 
 {
     Mat dst = Mat(src.rows, src.cols, src.type());
     for (int y = 0; y < src.rows; y++) 
@@ -79,29 +79,33 @@ Mat ApplyKernelSequential(Mat src, vector<vector<float> >* kernel)
     return dst;
 }
 
-Mat ApplyKernelSequentialFlat(Mat src, vector<vector<float> >* kernel) 
+Mat ApplyKernelSequentialFlat(const Mat& src, vector<vector<float> >* kernel) 
 {
     int kernel_flat_size = (*kernel).size() * (*kernel).size();
-    int src_flat_size = src.rows * src.cols;
+    int src_flat_size = src.rows * src.cols * src.elemSize();
 
     uchar* src_flat = ConvertMatToArray(src);
     float* kernel_flat = Convert2DVectorToArray(kernel);
-    uchar dst_flat[src_flat_size];
+    uchar* dst_flat = new uchar[src_flat_size];
 
-    for(int i = 0; i < src.rows*src.cols; i++)
+    uchar sum = 0;
+    int i_tmp;
+
+    for(int i = 0; i < src_flat_size; i++)
     {
         for(int j = 0; j < kernel_flat_size; j++)
         {
-            // TODO convolve with kernel - flat mode
-            // dst_flat[xx] = src_flat[yy] + kernel_flat[zz]
+            i_tmp = i; // TODO compute the right index on flat structures
+            sum = sum + kernel_flat[j] * src_flat[i_tmp];
         }
+        dst_flat[i] = sum;
     }
     
     Mat dst = Mat(src.rows, src.cols, src.type(), dst_flat);
     return dst;
 }
 
-Mat ApplyKernelParallel(Mat src, vector<vector<float> >* kernel, int num_threads)
+Mat ApplyKernelParallel(const Mat src, vector<vector<float> >* kernel, int num_threads)
 {
     Mat dst = Mat(src.rows, src.cols, src.type());
     omp_set_nested(1);
@@ -145,6 +149,7 @@ int main(int argc, char *argv[])
     {
         dst_sequential_flat = ApplyKernelSequentialFlat(src, &(kernel.values));
     }
+    cout << "    Correct: " << AreMatsEqual(dst_sequential, dst_sequential_flat) << endl;
 
     for(int t = 0; t < 4; t++) {
         int num_threads = pow(2, t);
@@ -154,12 +159,11 @@ int main(int argc, char *argv[])
         {
             dst_parallel = ApplyKernelParallel(src, &(kernel.values), num_threads);
         }
+        cout << "    Correct: " << AreMatsEqual(dst_sequential, dst_parallel) << endl;
     }
 
-    cout << "** Results are equal: " << AreMatsEqual(dst_sequential, dst_parallel) << endl;
-
     namedWindow("final", WINDOW_NORMAL);
-    imshow("final", dst_parallel);
+    imshow("final", dst_sequential_flat);
 
     namedWindow("initial", WINDOW_NORMAL);
     imshow("initial", src);
