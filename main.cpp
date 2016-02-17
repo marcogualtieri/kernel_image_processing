@@ -1,7 +1,8 @@
-#include<iostream>
+#include <iostream>
+#include <sstream>
 
-#include<opencv2/imgproc/imgproc.hpp>
-#include<opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
 #include <omp.h>
 
@@ -28,32 +29,11 @@ bool AreMatsEqual(Mat a, Mat b)
     return equal(a.begin<Vec3b>(), a.end<Vec3b>(), b.begin<Vec3b>());
 }
 
-uchar* ConvertMatToArray(Mat a) 
-{
-    vector<uchar> tmp;
-    tmp.assign((uchar*)a.datastart, (uchar*)a.dataend);
-    return &tmp[0];
-}
-
-float* Convert2DVectorToArray(vector<vector<float> >* kernel)
-{
-    int k = (*kernel).size();
-    float* tmp = new float[k*k];
-    for(int i = 0; i < k; i++)
-    {
-        for(int j = 0; j < k; j++)
-        {
-            tmp[j + i*k] = (*kernel)[i][j];
-        }
-    }
-    return tmp;
-}
-
-Vec3b Convolution(const Mat src, vector<vector<float> >* kernel, int x, int y) 
+Vec3b Convolution(const Mat& src, vector<vector<float> >* kernel, int x, int y) 
 {
     int k = (*kernel).size() / 2;
     int x_tmp, y_tmp;
-    Vec3b sum = 0.0;
+    Vec3b sum = 0;
     for (int i = -k; i <= k; i++) 
     {
         for (int j = -k; j <= k; j++) 
@@ -66,7 +46,7 @@ Vec3b Convolution(const Mat src, vector<vector<float> >* kernel, int x, int y)
     return sum;
 }
 
-Mat ApplyKernelSequential(const Mat src, vector<vector<float> >* kernel) 
+Mat ApplyKernelSequential(const Mat& src, vector<vector<float> >* kernel) 
 {
     Mat dst = Mat(src.rows, src.cols, src.type());
     for (int y = 0; y < src.rows; y++) 
@@ -79,33 +59,7 @@ Mat ApplyKernelSequential(const Mat src, vector<vector<float> >* kernel)
     return dst;
 }
 
-Mat ApplyKernelSequentialFlat(const Mat& src, vector<vector<float> >* kernel) 
-{
-    int kernel_flat_size = (*kernel).size() * (*kernel).size();
-    int src_flat_size = src.rows * src.cols * src.elemSize();
-
-    uchar* src_flat = ConvertMatToArray(src);
-    float* kernel_flat = Convert2DVectorToArray(kernel);
-    uchar* dst_flat = new uchar[src_flat_size];
-
-    uchar sum = 0;
-    int i_tmp;
-
-    for(int i = 0; i < src_flat_size; i++)
-    {
-        for(int j = 0; j < kernel_flat_size; j++)
-        {
-            i_tmp = i; // TODO compute the right index on flat structures
-            sum = sum + kernel_flat[j] * src_flat[i_tmp];
-        }
-        dst_flat[i] = sum;
-    }
-    
-    Mat dst = Mat(src.rows, src.cols, src.type(), dst_flat);
-    return dst;
-}
-
-Mat ApplyKernelParallel(const Mat src, vector<vector<float> >* kernel, int num_threads)
+Mat ApplyKernelParallel(const Mat& src, vector<vector<float> >* kernel, int num_threads)
 {
     Mat dst = Mat(src.rows, src.cols, src.type());
     omp_set_nested(1);
@@ -120,10 +74,67 @@ Mat ApplyKernelParallel(const Mat src, vector<vector<float> >* kernel, int num_t
     }
     return dst;
 }
+
+void ProcessSingleBlock(const Mat& src, Mat& dst, vector<vector<float> >* kernel, int x_start, int y_start, int block_width) 
+{
+    int x, y;
+    for (y = y_start; y < y_start + block_width; y++) 
+    {
+        if(y == src.rows) break;
+        for (x = x_start; x < x_start + block_width; x++) 
+        {
+            if(x == src.cols) break;
+            dst.at<Vec3b>(y,x) = Convolution(src, kernel, x, y);
+        }
+    }
+}
+
+Mat ApplyKernelParallelBlock(const Mat& src, vector<vector<float> >* kernel, int num_threads)
+{
+    Mat dst = Mat(src.rows, src.cols, src.type());
+    int block_width = 64;
+    #pragma omp parallel for num_threads(num_threads) collapse(2)
+    for (int y = 0; y < src.rows; y+=block_width) 
+    {
+        for (int x = 0; x < src.cols; x+=block_width) 
+        {
+            ProcessSingleBlock(src, dst, kernel, x, y, block_width);
+        }
+    }
+    return dst;
+}
  
 int main(int argc, char *argv[])
 { 
+    if (argc < 5)
+    {
+        cerr << "Provide following parameters: " << endl;
+        cerr << " - Image file path" << endl;
+        cerr << " - Number of threads" << endl;
+        cerr << " - Image blocks width" << endl;
+        cerr << " - Display results (true/false)" << endl; 
+        return -1;
+    }
+
     char* filename = argv[1];
+
+    istringstream num_threads_ss(argv[2]);
+    int num_threads;
+    if (!(num_threads_ss >> num_threads))
+    {
+        cerr << "Invalid number of threads: " << argv[2] << endl;
+        return -1;
+    }
+    
+    istringstream block_width_ss(argv[3]);
+    int block_width;
+    if (!(block_width_ss >> block_width))
+    {
+        cerr << "Invalid blocks width: " << argv[3] << endl;
+        return -1;
+    }
+
+    bool display_images = string(argv[4]) == "true";
 
     Mat src = imread(filename, CV_LOAD_IMAGE_COLOR);
 
@@ -137,38 +148,39 @@ int main(int argc, char *argv[])
 
     GaussianKernel kernel(5);
 
-    Mat dst_sequential, dst_sequential_flat,
-        dst_parallel, dst_parallel_flat;
+    Mat dst_sequential, dst_parallel, dst_parallel_blocks;
 
-    profile_omp_time__("*** Sequential version")
+    profile_omp_time__("*** Sequential version - Elapsed time")
     {
         dst_sequential = ApplyKernelSequential(src, &(kernel.values));
     }
 
-    profile_omp_time__("*** Sequential version - Flat")
+    ostringstream label;
+    label << "*** OpenMP version - " << num_threads << " thread(s) - Elapsed time";
+    profile_omp_time__(label.str())
     {
-        dst_sequential_flat = ApplyKernelSequentialFlat(src, &(kernel.values));
+        dst_parallel = ApplyKernelParallel(src, &(kernel.values), num_threads);
     }
-    cout << "    Correct: " << AreMatsEqual(dst_sequential, dst_sequential_flat) << endl;
+    cout << "    Correct: " << AreMatsEqual(dst_sequential, dst_parallel) << endl;
 
-    for(int t = 0; t < 4; t++) {
-        int num_threads = pow(2, t);
-        ostringstream label;
-        label << "*** OpenMP version - " << num_threads << " thread(s)";
-        profile_omp_time__(label.str())
-        {
-            dst_parallel = ApplyKernelParallel(src, &(kernel.values), num_threads);
-        }
-        cout << "    Correct: " << AreMatsEqual(dst_sequential, dst_parallel) << endl;
+    label.str("");
+    label << "*** OpenMP version - " << num_threads << " thread(s) - Block width " << block_width << " - Elapsed time";
+    profile_omp_time__(label.str())
+    {
+        dst_parallel_blocks = ApplyKernelParallelBlock(src, &(kernel.values), num_threads);
     }
+    cout << "    Correct: " << AreMatsEqual(dst_sequential, dst_parallel_blocks) << endl;
 
-    namedWindow("final", WINDOW_NORMAL);
-    imshow("final", dst_sequential_flat);
+    if(display_images)
+    {
+        namedWindow("Source", WINDOW_NORMAL);
+        imshow("Source", src);
 
-    namedWindow("initial", WINDOW_NORMAL);
-    imshow("initial", src);
- 
-    waitKey();
+        namedWindow("Result", WINDOW_NORMAL);
+        imshow("Result", dst_sequential);
+
+        waitKey();
+    }
  
     return 0;
 }
