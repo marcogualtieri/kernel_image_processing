@@ -56,58 +56,6 @@ float* Convert2DVectorToArray(vector<vector<float> >* kernel)
     return tmp;
 }
 
-Mat ApplyKernelSequential1D(const Mat& src, vector<vector<float> >* kernel) 
-{
-    uchar* src_flat = ConvertMatToArray(src);
-    int src_flat_size = src.rows * src.cols * 3;
-    uchar* dst_flat = new uchar[src_flat_size];
-
-    float* kernel_flat = Convert2DVectorToArray(kernel);
-
-    int k = (*kernel).size() / 2;
-    int kernel_width = (*kernel).size();
-
-    int x_tmp, y_tmp;
-
-    float sum_b = 0.0;
-    float sum_g = 0.0;
-    float sum_r = 0.0;
-
-    int x, y, flat_b_index;
-    int i, j, flat_kernel_index;
-
-    for (int m = 0; m < src_flat_size; m += 3) 
-    {
-        x = m % (src.cols * 3) / 3;
-        y = m / (src.cols * 3);
-        
-        sum_b = 0.0;
-        sum_g = 0.0;
-        sum_r = 0.0;
-
-        for (int n = 0; n < kernel_width * kernel_width; n++) 
-        {
-            i = n % kernel_width;
-            j = n / kernel_width;
-        
-            x_tmp = Reflect(src.cols, x-(j-k));
-            y_tmp = Reflect(src.rows, y-(i-k));
-
-            flat_b_index = x_tmp * 3 + src.cols * 3 * y_tmp;
-            flat_kernel_index = i + kernel_width * j;
-
-            sum_b += kernel_flat[flat_kernel_index] * src_flat[flat_b_index];
-            sum_g += kernel_flat[flat_kernel_index] * src_flat[flat_b_index+1];
-            sum_r += kernel_flat[flat_kernel_index] * src_flat[flat_b_index+2];
-        }
-        dst_flat[m] = sum_b;
-        dst_flat[m+1] = sum_g;
-        dst_flat[m+2] = sum_r;
-    }
-    Mat dst = Mat(src.rows, src.cols, src.type(), dst_flat);
-    return dst;
-}
-
 Mat ApplyKernelParallel1D(const Mat& src, vector<vector<float> >* kernel, int num_threads) 
 {
     uchar* src_flat = ConvertMatToArray(src);
@@ -196,8 +144,8 @@ Mat ApplyKernelSequential(const Mat& src, vector<vector<float> >* kernel)
 Mat ApplyKernelParallel(const Mat& src, vector<vector<float> >* kernel, int num_threads)
 {
     Mat dst = Mat(src.rows, src.cols, src.type());
-    omp_set_nested(1);
     int x,y;
+    omp_set_nested(1);
     #pragma omp parallel for num_threads(num_threads) collapse(2)
     for (y = 0; y < src.rows; y++) 
     {
@@ -209,7 +157,7 @@ Mat ApplyKernelParallel(const Mat& src, vector<vector<float> >* kernel, int num_
     return dst;
 }
 
-void ApplyKernelParallelSingleBlock(const Mat& src, Mat& dst, vector<vector<float> >* kernel, int x_start, int y_start, int block_side_length) 
+void ApplyKernelSingleBlock(const Mat& src, Mat& dst, vector<vector<float> >* kernel, int x_start, int y_start, int block_side_length) 
 {
     int x, y;
     for (y = y_start; y < y_start + block_side_length; y++) 
@@ -232,7 +180,7 @@ Mat ApplyKernelParallelBlock(const Mat& src, vector<vector<float> >* kernel, int
     {
         for (int x = 0; x < src.cols; x += block_side_length) 
         {
-            ApplyKernelParallelSingleBlock(src, dst, kernel, x, y, block_side_length);
+            ApplyKernelSingleBlock(src, dst, kernel, x, y, block_side_length);
         }
     }
     return dst;
@@ -288,11 +236,9 @@ int main(int argc, char *argv[])
 
     bool display_images = string(argv[5]) == "true";
 
-    cout << "Processing image file " << filename << endl;
+    cout << "\nProcessing image file " << filename << endl;
 
     /* 2D versions */
-
-    cout << "*** 2D VERSION ***" << endl;
 
     Mat dst_sequential, 
         dst_parallel, dst_parallel_blocks,
@@ -309,34 +255,23 @@ int main(int argc, char *argv[])
     {
         dst_parallel = ApplyKernelParallel(src, &(kernel.values), num_threads);
     }
-    cout << "  Correct: " << AreMatsEqual(dst_sequential, dst_parallel) << endl;
 
     label.str("");
-    label << "* OpenMP version - " << num_threads << " thread(s) - Block side length " << block_side_length << "px - Elapsed time";
+    label << "* OpenMP version - " << num_threads << " thread(s) - "<< block_side_length << "x" << block_side_length << " blocks - Elapsed time";
     profile_omp_time__(label.str())
     {
         dst_parallel_blocks = ApplyKernelParallelBlock(src, &(kernel.values), num_threads, block_side_length);
     }
-    cout << "  Correct: " << AreMatsEqual(dst_sequential, dst_parallel_blocks) << endl;
 
     /* 1D version */
 
-    cout << "*** 1D VERSION ***" << endl;
-
-    profile_omp_time__("* Sequential version 1D - Elapsed time")
-    {
-        dst_sequential_1d = ApplyKernelSequential1D(src, &(kernel.values));
-    }
-
     label.str("");
-    label << "* OpenMP version 1D - " << num_threads << " thread(s) - Elapsed time";
+    label << "* OpenMP version - " << num_threads << " thread(s) - 1D array - Elapsed time";
     profile_omp_time__(label.str())
     {
         dst_parallel_1d = ApplyKernelParallel1D(src, &(kernel.values), num_threads);
     }
-    cout << "  Correct: " << AreMatsEqual(dst_sequential_1d, dst_parallel_1d) << endl;
     
-
     /* display result */
 
     if(display_images)
