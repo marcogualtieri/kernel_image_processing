@@ -66,7 +66,7 @@ __global__ void convolution_kernel(uchar* src, uchar* dst, int width, int height
 			sum_g += kernel[flat_kernel_index] * src[flat_b_index+1];
 			sum_r += kernel[flat_kernel_index] * src[flat_b_index+2];
 		}
-		
+
 		dst[pixel_tid] = sum_b;
 		dst[pixel_tid+1] = sum_g;
 		dst[pixel_tid+2] = sum_r;
@@ -197,12 +197,12 @@ int main(int argc, char *argv[])
 
     bool display_images = string(argv[4]) == "true";
 
-    // cout << "-------------------------" << endl;
-    // cout << "--- DEVICE PROPERTIES ---" << endl;
-    // cout << "-------------------------" << endl;
-	// cudaDeviceProp prop;
-	// cudaGetDeviceProperties(&prop, 0);
-    // PrintDeviceProperties(prop);
+    cout << "-------------------------" << endl;
+    cout << "--- DEVICE PROPERTIES ---" << endl;
+    cout << "-------------------------" << endl;
+	cudaDeviceProp prop;
+	cudaGetDeviceProperties(&prop, 0);
+    PrintDeviceProperties(prop);
 
     cout << "\nProcessing image file " << filename << endl;
 
@@ -239,7 +239,7 @@ int main(int argc, char *argv[])
     src.release();
 	dst.release();
 
-	SAFE_CUDA_CALL(cudaDeviceReset(),"Error in CUda device reset");
+	SAFE_CUDA_CALL(cudaDeviceReset(), "Error in CUDA device reset");
  
     return 0;
 }
