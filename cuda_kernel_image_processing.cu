@@ -112,7 +112,7 @@ void PrintDeviceProperties(cudaDeviceProp devProp)
     return;
 }
 
-Mat convolution(const Mat& host_src, vector<vector<float> >* kernel, int threads_block_size)
+Mat convolution(const Mat& host_src, vector<vector<float> >* kernel, int threads_block_x_size, int threads_block_y_size)
 {
 	Mat host_dst = Mat::zeros(host_src.rows, host_src.cols, host_src.type());
 
@@ -132,7 +132,7 @@ Mat convolution(const Mat& host_src, vector<vector<float> >* kernel, int threads
 	SAFE_CUDA_CALL(cudaMemcpy(dev_kernel, kernel_flat, kernel_size * sizeof(float), cudaMemcpyHostToDevice),"CUDA memcpy host to device failed");
 
 	// set block siza
-	const dim3 block(threads_block_size, threads_block_size);
+	const dim3 block(threads_block_x_size, threads_block_y_size);
 	// calculate grid size to cover the whole image
 	const dim3 grid((host_src.cols + block.x - 1) / block.x, (host_src.rows + block.y - 1) / block.y);
 
@@ -160,12 +160,13 @@ int main(int argc, char *argv[])
 {
 	/* parse input and prepare data */
 
-    if (argc < 5)
+    if (argc < 6)
     {
         cerr << "Provide following parameters: " << endl;
         cerr << " - Image file path" << endl;
         cerr << " - Size of Gaussian kernel" << endl;
-        cerr << " - Size of threads block" << endl;
+        cerr << " - Threads block - x size" << endl;
+        cerr << " - Threads block - y size" << endl;
         cerr << " - Display results (true/false)" << endl; 
         return -1;
     }
@@ -187,15 +188,23 @@ int main(int argc, char *argv[])
     }
     GaussianKernel kernel(gaussian_size);
 
-    istringstream threads_block_size_ss(argv[3]);
-    uint threads_block_size;
-    if (!(threads_block_size_ss >> threads_block_size))
+    istringstream threads_block_x_size_ss(argv[3]);
+    uint threads_block_x_size;
+    if (!(threads_block_x_size_ss >> threads_block_x_size))
     {
-        cerr << "Invalid number of threads block size: " << argv[3] << endl;
+        cerr << "Invalid threads block x size: " << argv[3] << endl;
         return -1;
     }
 
-    bool display_images = string(argv[4]) == "true";
+    istringstream threads_block_y_size_ss(argv[4]);
+    uint threads_block_y_size;
+    if (!(threads_block_y_size_ss >> threads_block_y_size))
+    {
+        cerr << "Invalid threads block y size: " << argv[4] << endl;
+        return -1;
+    }
+
+    bool display_images = string(argv[5]) == "true";
 
     cout << "-------------------------" << endl;
     cout << "--- DEVICE PROPERTIES ---" << endl;
@@ -213,7 +222,7 @@ int main(int argc, char *argv[])
 	cudaEventCreate(&stop);
 
 	cudaEventRecord(start);
-	Mat dst = convolution(src, &(kernel.values), threads_block_size);
+	Mat dst = convolution(src, &(kernel.values), threads_block_x_size, threads_block_y_size);
 	cudaEventRecord(stop);
 
 	cudaEventSynchronize(stop);
@@ -221,7 +230,7 @@ int main(int argc, char *argv[])
 
 	cudaEventElapsedTime(&milliseconds, start, stop);
 
-	cout << "* CUDA version - " << threads_block_size << "x" << threads_block_size << "x1 threads block - Elapsed time " << milliseconds << " ms" << endl; 
+	cout << "* CUDA version - " << threads_block_x_size << "x" << threads_block_y_size << "x1 threads block - Elapsed time " << milliseconds << " ms" << endl; 
 
 	/* display result */
 
