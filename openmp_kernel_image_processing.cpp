@@ -9,7 +9,7 @@
 #include "gaussian_kernel.hpp"
 
 #ifndef profile_omp_time__             
-#define profile_omp_time__(label) for(double blockTime = -1; (blockTime == -1 ? (blockTime = omp_get_wtime()) != -1 : false); cout << label << " " << omp_get_wtime()-blockTime << endl)
+#define profile_omp_time__(label) for(double blockTime = -1; (blockTime == -1 ? (blockTime = omp_get_wtime()) != -1 : false); cout << label << " " << (omp_get_wtime()-blockTime)*1000 << " ms" << endl)
 #endif
  
 using namespace std;

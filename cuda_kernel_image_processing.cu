@@ -1,4 +1,5 @@
 #include <iostream>
+#include <stdio.h>
 
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -35,27 +36,16 @@ __device__ int Reflect(int size, int p)
 
 __global__ void convolution_kernel(uchar* src, uchar* dst, int width, int height, int width_step, float* kernel, int kernel_width)
 {
-	//2D Index of current thread
 	const int x = blockIdx.x * blockDim.x + threadIdx.x;
 	const int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-	//Only valid threads perform memory I/O
-	if((x<width) && (y<height))
+	// consider only valid pixel coordinates
+	if((x < width) && (y < height))
 	{
-		//Location of pixel in input
+		// pixel index in the src array
 		const int pixel_tid = y * width * 3 + (3 * x);
 
-		//printf("%d,%d - %d\n",x,y,pixel_tid);
-		//printf("%d\n", pixel_tid);
-		/*const uchar blue	= src[pixel_tid];
-		const uchar green	= src[pixel_tid + 1];
-		const uchar red		= src[pixel_tid + 2];
-		*/
-		/*dst[pixel_tid] = 0;
-		dst[pixel_tid + 1] = 0;
-		dst[pixel_tid + 2] = 0;*/
-
-		int i,j,x_tmp,y_tmp,flat_b_index,flat_kernel_index;
+		int i, j, x_tmp, y_tmp, flat_b_index, flat_kernel_index;
 		int k = kernel_width / 2;
 		float sum_b = 0.0;
 		float sum_g = 0.0;
@@ -75,8 +65,8 @@ __global__ void convolution_kernel(uchar* src, uchar* dst, int width, int height
 			sum_b += kernel[flat_kernel_index] * src[flat_b_index];
 			sum_g += kernel[flat_kernel_index] * src[flat_b_index+1];
 			sum_r += kernel[flat_kernel_index] * src[flat_b_index+2];
-
 		}
+		
 		dst[pixel_tid] = sum_b;
 		dst[pixel_tid+1] = sum_g;
 		dst[pixel_tid+2] = sum_r;
@@ -97,7 +87,32 @@ float* Convert2DVectorToArray(vector<vector<float> >* kernel)
     return tmp;
 }
 
-Mat convolution(const Mat& host_src, vector<vector<float> >* kernel)
+void PrintDeviceProperties(cudaDeviceProp devProp)
+{
+    printf("Major revision number:         %d\n",  devProp.major);
+    printf("Minor revision number:         %d\n",  devProp.minor);
+    printf("Name:                          %s\n",  devProp.name);
+    printf("Total global memory:           %zu\n",  devProp.totalGlobalMem);
+    printf("Total shared memory per block: %zu\n",  devProp.sharedMemPerBlock);
+    printf("Total registers per block:     %d\n",  devProp.regsPerBlock);
+    printf("Warp size:                     %d\n",  devProp.warpSize);
+    printf("Maximum memory pitch:          %zu\n",  devProp.memPitch);
+    printf("Maximum threads per block:     %d\n",  devProp.maxThreadsPerBlock);
+    for (int i = 0; i < 3; i++)
+	{
+    	printf("Maximum dimension %d of block:  %d\n", i, devProp.maxThreadsDim[i]);
+    	printf("Maximum dimension %d of grid:   %d\n", i, devProp.maxGridSize[i]);
+    }
+    printf("Clock rate:                    %d\n",  devProp.clockRate);
+    printf("Total constant memory:         %zu\n",  devProp.totalConstMem);
+    printf("Texture alignment:             %zu\n",  devProp.textureAlignment);
+    printf("Concurrent copy and execution: %s\n",  (devProp.deviceOverlap ? "Yes" : "No"));
+    printf("Number of multiprocessors:     %d\n",  devProp.multiProcessorCount);
+    printf("Kernel execution timeout:      %s\n",  (devProp.kernelExecTimeoutEnabled ? "Yes" : "No"));
+    return;
+}
+
+Mat convolution(const Mat& host_src, vector<vector<float> >* kernel, int threads_block_size)
 {
 	Mat host_dst = Mat::zeros(host_src.rows, host_src.cols, host_src.type());
 
@@ -108,30 +123,32 @@ Mat convolution(const Mat& host_src, vector<vector<float> >* kernel)
 	const int bytes = host_src.step * host_src.rows;
 	uchar *dev_src, *dev_dst;
 	float* dev_kernel;
-	SAFE_CUDA_CALL(cudaMalloc(&dev_src, bytes),"CUDA - malloc failed");
-	SAFE_CUDA_CALL(cudaMalloc(&dev_dst, bytes),"CUDA - malloc failed");
-	SAFE_CUDA_CALL(cudaMalloc(&dev_kernel, kernel_size * sizeof(float)),"CUDA - malloc failed");
+	SAFE_CUDA_CALL(cudaMalloc(&dev_src, bytes),"CUDA malloc failed");
+	SAFE_CUDA_CALL(cudaMalloc(&dev_dst, bytes),"CUDA malloc failed");
+	SAFE_CUDA_CALL(cudaMalloc(&dev_kernel, kernel_size * sizeof(float)),"CUDA malloc failed");
 
 	// copy data from OpenCV structure to device memory
-	SAFE_CUDA_CALL(cudaMemcpy(dev_src, host_src.ptr(), bytes, cudaMemcpyHostToDevice),"CUDA - Memcpy host to device failed");
-	SAFE_CUDA_CALL(cudaMemcpy(dev_kernel, kernel_flat, kernel_size * sizeof(float), cudaMemcpyHostToDevice),"CUDA - Memcpy host to device failed");
+	SAFE_CUDA_CALL(cudaMemcpy(dev_src, host_src.ptr(), bytes, cudaMemcpyHostToDevice),"CUDA memcpy host to device failed");
+	SAFE_CUDA_CALL(cudaMemcpy(dev_kernel, kernel_flat, kernel_size * sizeof(float), cudaMemcpyHostToDevice),"CUDA memcpy host to device failed");
 
-	//Specify a reasonable block size
-	const dim3 block(16,16);
+	// set block siza
+	const dim3 block(threads_block_size, threads_block_size);
+	// calculate grid size to cover the whole image
+	const dim3 grid((host_src.cols + block.x - 1) / block.x, (host_src.rows + block.y - 1) / block.y);
 
-	//Calculate grid size to cover the whole image
-	const dim3 grid((host_src.cols + block.x - 1)/block.x, (host_src.rows + block.y - 1)/block.y);
-
-	//Launch the color conversion kernel
+	// Launch the color conversion kernel
 	convolution_kernel<<<grid, block>>>(dev_src, dev_dst, host_src.cols, host_src.rows, host_src.step, dev_kernel, (*kernel).size());
 
-	//Synchronize to check for any kernel launch errors
-	SAFE_CUDA_CALL(cudaDeviceSynchronize(),"Kernel Launch Failed");
+	cudaError_t kernel_error = cudaGetLastError();
+	if (kernel_error != cudaSuccess)
+		cout << "CUDA Kernel Error: " << cudaGetErrorString(kernel_error) << endl;
 
-	//Copy back data from destination device memory to OpenCV output image
+	SAFE_CUDA_CALL(cudaDeviceSynchronize(),"CUDA Kernel Error");
+
+	// copy data from device memory to OpenCV output image
 	SAFE_CUDA_CALL(cudaMemcpy(host_dst.ptr(),dev_dst,bytes,cudaMemcpyDeviceToHost),"CUDA Memcpy Host To Device Failed");
 
-	//Free the device memory
+	// free the device memory
 	SAFE_CUDA_CALL(cudaFree(dev_src),"CUDA Free Failed");
 	SAFE_CUDA_CALL(cudaFree(dev_dst),"CUDA Free Failed");
 	SAFE_CUDA_CALL(cudaFree(dev_kernel),"CUDA Free Failed");
@@ -139,35 +156,90 @@ Mat convolution(const Mat& host_src, vector<vector<float> >* kernel)
 	return host_dst;
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+	/* parse input and prepare data */
 
-	string filename = "landscape.jpg";
+    if (argc < 5)
+    {
+        cerr << "Provide following parameters: " << endl;
+        cerr << " - Image file path" << endl;
+        cerr << " - Size of Gaussian kernel" << endl;
+        cerr << " - Size of threads block" << endl;
+        cerr << " - Display results (true/false)" << endl; 
+        return -1;
+    }
 
-	Mat src = imread(filename, CV_LOAD_IMAGE_COLOR);
+    char* filename = argv[1];
+    Mat src = imread(filename, CV_LOAD_IMAGE_COLOR);
+    if (!src.data) 
+    {
+        cerr << "Image file " << filename << "not found!" << endl;
+        return -1;        
+    }  
 
-	if(src.empty())
-	{
-		cout << "Image Not Found!" << endl;
-		return -1;
-	}
+    istringstream gaussian_size_ss(argv[2]);
+    uint gaussian_size;
+    if (!(gaussian_size_ss >> gaussian_size) || (gaussian_size % 2) == 0)
+    {
+        cerr << "Gaussian kernel size must be an odd integer: " << argv[2] << endl;
+        return -1;
+    }
+    GaussianKernel kernel(gaussian_size);
 
-	GaussianKernel kernel(3);
+    istringstream threads_block_size_ss(argv[3]);
+    uint threads_block_size;
+    if (!(threads_block_size_ss >> threads_block_size))
+    {
+        cerr << "Invalid number of threads block size: " << argv[3] << endl;
+        return -1;
+    }
 
-	Mat dst = convolution(src, &(kernel.values));
+    bool display_images = string(argv[4]) == "true";
 
-	namedWindow("final", WINDOW_NORMAL);
-	imshow("final", dst);
+    // cout << "-------------------------" << endl;
+    // cout << "--- DEVICE PROPERTIES ---" << endl;
+    // cout << "-------------------------" << endl;
+	// cudaDeviceProp prop;
+	// cudaGetDeviceProperties(&prop, 0);
+    // PrintDeviceProperties(prop);
 
-	namedWindow("initial", WINDOW_NORMAL);
-	imshow("initial", src);
+    cout << "\nProcessing image file " << filename << endl;
 
-	waitKey();
+    /* apply convolution */
 
-	src.release();
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
+	cudaEventRecord(start);
+	Mat dst = convolution(src, &(kernel.values), threads_block_size);
+	cudaEventRecord(stop);
+
+	cudaEventSynchronize(stop);
+	float milliseconds = 0;
+
+	cudaEventElapsedTime(&milliseconds, start, stop);
+
+	cout << "* CUDA version - " << threads_block_size << "x" << threads_block_size << "x1 threads block - Elapsed time " << milliseconds << " ms" << endl; 
+
+	/* display result */
+
+    if(display_images)
+    {
+        namedWindow("Source", WINDOW_NORMAL);
+        imshow("Source", src);
+
+        namedWindow("Result", WINDOW_NORMAL);
+        imshow("Result", dst);
+
+        waitKey();
+    }
+
+    src.release();
 	dst.release();
 
-	SAFE_CUDA_CALL(cudaDeviceReset(),"CUDA can't clear memory");
-
-	return 0;
+	SAFE_CUDA_CALL(cudaDeviceReset(),"Error in CUda device reset");
+ 
+    return 0;
 }
