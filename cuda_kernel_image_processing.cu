@@ -75,7 +75,7 @@ __global__ void convolution_kernel_bgr(uchar* src, uchar* dst, int width, int he
 	if((x < width) && (y < height))
 	{
 		// pixel index in the src array
-		const int pixel_tid = y * width * 3 + (3 * x) + threadIdx.z;
+		const int pixel_tid = y * width * 3 + (3 * x);
 		int i, j, x_tmp, y_tmp, flat_b_index, flat_kernel_index;
 		int k = kernel_width / 2;
 		float sum_b = 0.0;
